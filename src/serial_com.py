@@ -6,8 +6,8 @@ import time
 import serial
 import math
 from std_msgs.msg import String
-from zero_serial.msg import VehicleState
-from zero_serial.msg import control
+from core_msgs.msg import VehicleState
+from core_msgs.msg import Control
 
 alive = 0
 enc = []
@@ -16,13 +16,13 @@ def init():
 
     pub = rospy.Publisher('vehicle_state', VehicleState, queue_size=10)
     control_data = getControlData()
-    rospy.Subscriber("control", control, control_data.callback)
+    rospy.Subscriber("control", Control, control_data.callback)
     rospy.init_node('serial_com', anonymous=True)
     rate = rospy.Rate(50)
     msg = VehicleState() #define msg - current platform state
-    
+
     try:
-        with serial.Serial(port='/dev/ttyUSB0', 
+        with serial.Serial(port='/dev/ttyUSB0',
                            baudrate=115200,
                            parity=serial.PARITY_NONE,
                            stopbits=serial.STOPBITS_ONE,
@@ -38,19 +38,21 @@ def init():
                 rate.sleep()
     except:
         print("Connection Error")
-    
-    
+
+
 def MsgUpdate(msg,ser): #message about current sate (serial data : platform->upper)
-    
+
     raw_data = ser.read(18)
     data = []
     for i in range(0,18):
         data.append(hex(int(raw_data[i].encode('hex'),16)))
     is_auto = int(data[3],16)
     estop = int(data[4],16)
+    if(estop == 16):
+        estop = 1
     gear = int(data[5],16)
-    
-    
+
+
     #Steer calculation # degree
     if(len(data[9])>=4):
         steer = int(data[9],16) * 256 + int(data[8],16) + 1 - pow(2,15)
@@ -58,31 +60,32 @@ def MsgUpdate(msg,ser): #message about current sate (serial data : platform->upp
     else:
         steer = int(data[9],16) * 256 + int(data[8],16)
         steer = -float(steer)/71
-        
-        
+
+
     brake = int(data[10],16)
-      
+
     global alive
     alive = int(data[15],16)
-    
+
     #encoder caculation
+
     encoder = int(data[14],16) * pow(256,3) + int(data[13],16) * pow(256,2) + int(data[12],16) * pow(256,1) + int(data[11],16)
     if encoder > pow(256,4) * 0.75: # in case encoder < 0
         encoder = encoder - pow(256,4)
-        
+
     #Speed caculation : m/s
     global enc
     radius = 0.266 # meter scale
     distance = 2 * math.pi * radius # distance per rotation
     enc.append(encoder)
     if(len(enc)>=20):
-        speed = float(enc[19] - enc[15] + enc[14] - enc[10] + enc[9]-enc[5] + enc[4]-enc[0]) / float(100) * float(distance) # m/s
+        speed = ((enc[19] - enc[0]) / float(100)) * float(distance) # m/s
         enc.pop(0)
     else:
         speed = 0 #initial speed : 0 m/s
-        
+
     if not isValidValue(speed, steer): return msg #in case of invalid speed or steer -> no update of msg
-    
+
     #setting message variables
     msg.is_auto = is_auto
     msg.estop = estop
@@ -105,14 +108,14 @@ def sendSerial(ser,data): #upper->platform
     global alive
     data_array = bytearray([83, 84, 88, is_auto, estop, gear, 0, speed, steer1, steer2, brake, alive, 13, 10])
     ser.write(data_array)
-    
+
 def isValidValue(speed, steer): #speed : m/s, steer : degree
-    if abs(speed) <= 6 or abs(steer) <= 35:
+    if abs(speed) <= 10 and abs(steer) <= 35:
         return True
     else:
         return False
-    
-class getControlData(): #input:speed(m/s), steer(degree) -> output: speed(km/h * 10), steer(degree*71, steer1:first byte, steer2:second byte) 
+
+class getControlData(): #input:speed(m/s), steer(degree) -> output: speed(km/h * 10), steer(degree*71, steer1:first byte, steer2:second byte)
     def __init__(self):
         self.is_auto = 0
         self.estop = 0
@@ -122,10 +125,10 @@ class getControlData(): #input:speed(m/s), steer(degree) -> output: speed(km/h *
         self.steer2 = 0
         self.brake=200
         pass
-    
+
     def callback(self,data_): #serial data update (upper->platform)
-        
-        
+
+
         self.is_auto = data_.is_auto
         self.estop = data_.estop
         self.gear = data_.gear
@@ -140,7 +143,7 @@ class getControlData(): #input:speed(m/s), steer(degree) -> output: speed(km/h *
             steer_high = (steer-steer_low)/256 + pow(2,7)
         self.steer1 = steer_high
         self.steer2 = steer_low
-       
+
         self.brake = data_.brake
 
 
